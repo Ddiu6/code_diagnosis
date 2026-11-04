@@ -1,80 +1,149 @@
-#  眼B超多视图诊断
+# View-Gated Multi-Head Attention MIL for Multi-View Ocular B-Scan Diagnosis
 
-## 目录结构
+Reference implementation of the framework and the ablation configurations reported in
+
+> **MI-OBUD: A Multi-View Ocular B-Scan Ultrasound Dataset and View-Gated Multi-Head Attention MIL
+> for Eye-Level Disease Diagnosis** (submitted to *Biomedical Signal Processing and Control*)
+
+One eye is treated as an unordered bag of a variable number of B-scan views, and the model predicts
+a six-dimensional eye-level multi-label vector. A shared encoder produces per-view features; a
+view-level scalar gate decides how much cross-view context each view accepts; a channel gate
+filters each view dimension by dimension; multi-head attention pooling aggregates evidence across
+views; and a residual head outputs non-mutually-exclusive label probabilities.
+
+## Repository layout
 
 ```
-code1021/
-├── main.py                 # 入口：train / eval / test / audit_ema
-├── main_seed.py            # 多种子训练脚本
-├── make_ablation_configs.py  # 生成减法消融 config
+code_diagnosis/
+├── main.py                    # entry point: train / eval / test / audit_ema
+├── main_seed.py               # multi-seed training driver
+├── make_ablation_configs.py   # generates the subtractive ablation configs
+├── make_ablation_configs_ours.py
+├── per_class_eval.py          # per-class metrics and confusion matrix
 ├── configs/
-│   ├── config.yaml         # 主配置
-│   └── ablation/           # 7 组减法消融 config（ablation_01_full ~ ablation_07_minimal）
+│   ├── config.yaml            # main configuration
+│   └── ablation/              # ablation configs (see table below)
 ├── models/
-│   ├── model.py            # 顶层 CLSTransformerMIL（对外统一接口）
-│   ├── diagnosis.py        # DiagnosisModel 组装
-│   ├── backbone.py         # ConvNeXt 骨干 + 投影层
-│   ├── fusion.py           # 多视图融合：跨视图交互/视图门控/多头注意力池化/对比损失
-│   ├── losses.py           # BCE / ASL / Focal 损失
-│   ├── label_gcn.py        # 标签共现 GCN
-│   └── evidence.py         # CoverageEvidenceHead
+│   ├── model.py               # CLSTransformerMIL, top-level interface
+│   ├── diagnosis.py           # DiagnosisModel assembly
+│   ├── backbone.py            # ConvNeXt backbone + projection layer
+│   ├── fusion.py              # cross-view interaction / gates / multi-head pooling / contrastive head
+│   ├── losses.py              # BCE / ASL / focal losses
+│   ├── label_gcn.py           # optional label-co-occurrence GCN head
+│   └── evidence.py            # optional coverage-evidence head
 ├── engine/
-│   ├── train.py            # 训练/验证循环、优化器、调度器
-│   ├── evaluate.py         # 评估 + TTA
-│   ├── ema.py              # 指数滑动平均
-│   └── early_stopping.py   # 早停
+│   ├── train.py               # training and validation loop, optimizer, scheduler
+│   ├── evaluate.py            # evaluation, optional TTA
+│   ├── ema.py                 # exponential moving average
+│   └── early_stopping.py
 ├── utils/
-│   ├── metrics.py          # micro/macro F1、AUC 等指标
-│   ├── loss_config.py      # 训练损失解析
-│   ├── logger.py           # 日志
-│   └── protocol.py         # 患者级划分校验、checkpoint 元数据校验
+│   ├── metrics.py             # micro/macro F1, AUC, ExactMatch, Hamming loss
+│   ├── loss_config.py
+│   ├── logger.py
+│   └── protocol.py            # patient-level split and checkpoint metadata checks
 └── datasets/
-    ├── eye_mil_dataset.py  # 眼级 MIL 数据集、划分、变换（含描述/诊断字段读取）
-    └── roi_usaug.py        # ROI 裁边 + 超声干扰仿真增强
+    ├── eye_mil_dataset.py     # eye-level MIL dataset, splits, transforms
+    └── roi_usaug.py           # ROI cropping and ultrasound-interference simulation augmentation
 ```
 
-## 模型数据流
+## Data flow
 
 ```
 images [B, N, 3, H, W]
-  → ImageBackbone (ConvNeXt-Tiny + proj)      → view_feats [B, N, D]
-  → CrossViewAttention    → interacted [B, N, D]
-  → ViewGate 
-  → MultiHeadAttentionPooling      → pooled [B, D]
-  → DiagnosisHead              → logits [B, C]
-  + ContrastiveProjectionHead (对比损失, 可选)
+  → ImageBackbone (ConvNeXt-Tiny + projection)   → view_feats [B, N, D]
+  → CrossViewAttention                           → interacted [B, N, D]
+  → ViewGate (scalar gate per view)
+  → ChannelGate (per-view, per-channel gate)
+  → MultiHeadAttentionPooling                    → pooled [B, D]
+  → DiagnosisHead (residual MLP)                 → logits [B, C]
+  + ContrastiveProjectionHead (optional, disabled in the final model)
 ```
 
-## 「删模块」的抓手
+`N` varies across eyes. Padded views are excluded by a view-validity mask in the cross-view
+attention, in the pooling step and in the loss.
 
-### 用 config 开关做消融（不改代码，改 yaml）
+## Configuration switches
 
-| config 开关 | 对应模块 | 默认 | 说明 |
+Every architectural component can be removed through `configs/config.yaml` without touching the
+code, which is how the ablation study is reproduced.
+
+| Config key | Component | Default | Effect when switched off |
 |---|---|---|---|
-| `model.use_cross_view` | CrossViewAttention | true | 关掉 = 无跨视图交互 |
-| `model.use_cross_view_gate` | 交互标量门控 | true | 关掉 = 直接采纳交互结果 |
-| `model.use_view_gate` | ViewGate 逐维度门控 | true | 关掉 = 无视图门控 |
-| `model.fusion_heads` | 多头注意力头数 | 4 | 设 1 = 单头 GatedAttention（即 Attention_MIL） |
-| `contrastive.enabled` | 对比损失 | true | 关掉 = 纯分类损失 |
-| `model.use_label_gcn` | 标签 GCN | false | 默认已关 |
-| `model.evidence.enabled` | CoverageEvidenceHead | false | 默认已关 |
+| `model.use_cross_view` | Cross-view interaction | `true` | no cross-view context at all |
+| `model.use_cross_view_gate` | Interaction gate (scalar, per view) | `true` | interaction adopted unconditionally |
+| `model.use_view_gate` | Channel gating (per view, per channel) | `true` | no channel-level filtering |
+| `model.fusion_heads` | Number of attention heads | `4` | `1` gives single-head gated attention (Attention-MIL) |
+| `contrastive.enabled` | Cross-view contrastive loss | **`false`** | the final model in the paper: classification loss only |
+| `model.use_label_gcn` | Label-co-occurrence GCN head | `false` | not used in the paper |
+| `model.evidence.enabled` | Coverage-evidence head | `false` | not used in the paper |
 
-## 减法消融实验
+> **Note on the default.** `contrastive.enabled` defaults to `false`, matching the final model
+> reported in the paper. Setting it to `true` reproduces the "+Contrastive Loss" variant, which the
+> ablation shows to be worse at this data scale.
 
-`make_ablation_configs.py` 生成 7 组 config（`configs/ablation/ablation_XX_name.yaml`），
-每次只删一个模块，最后加一个「最简基线」，用于定位哪个模块真正有用。
+## Reproducing the ablation table
 
-| config | 删了什么 | 交互 | 交互门 | 视图门 | 头数 | 对比 |
-|---|---|---|---|---|---|---|
-| ablation_01_full | （完整模型） | ✓ | ✓ | ✓ | 4 | ✓ |
-| ablation_02_no_cross_view | 跨视图交互 | ✗ | - | ✓ | 4 | ✓ |
-| ablation_03_no_cv_gate | 交互标量门控 | ✓ | ✗ | ✓ | 4 | ✓ |
-| ablation_04_no_view_gate | 视图门控 | ✓ | ✓ | ✗ | 4 | ✓ |
-| ablation_05_single_head | 多头→单头 | ✓ | ✓ | ✓ | 1 | ✓ |
-| ablation_06_no_contrastive | 对比损失 | ✓ | ✓ | ✓ | 4 | ✗ |
-| ablation_07_minimal | 全部删（最简基线） | ✗ | - | ✗ | 1 | ✗ |
+| Paper variant | Config file |
+|---|---|
+| Ours (final model) | `configs/ablation/ablation_06_no_contrastive.yaml` |
+| + Contrastive Loss | `configs/ablation/ablation_01_full.yaml` |
+| w/o Cross-View Interaction | `configs/ablation/ablation_08_ours_no_cross_view.yaml` |
+| w/o Interaction Gate | `configs/ablation/ablation_09_ours_no_interaction_gate.yaml` |
+| w/o Channel Gating | `configs/ablation/ablation_10_ours_no_channel_gate.yaml` |
+| w/ Single-Head Pooling | `configs/ablation/ablation_11_ours_single_head.yaml` |
+| Minimal model (lower bound) | `configs/ablation/ablation_07_minimal.yaml` |
 
-## 运行环境
+`ablation_02`–`ablation_05` belong to the earlier full-model series (contrastive loss enabled) and
+are kept for completeness; they are not part of the final table.
 
-- 训练在服务器（CUDA），本地 `E:\anacond\python.exe`（torch 2.2.2 CPU）可用于 import 验证。
-- 数据路径在 `configs/config.yaml` 的 `data.excel_path` / `data.image_root`（当前为服务器路径 `/mnt/...`）。
+## Environment
+
+Tested with Python 3.10, PyTorch 2.2.2 + CUDA 11.8 on a single GPU; CPU is sufficient for import
+checks.
+
+```bash
+pip install -r requirements.txt
+```
+
+## Data
+
+The MI-OBUD images and the label table are **not** distributed with this repository, because the
+B-scan images contain sensitive clinical information that cannot be released under the current
+ethics approval. They are available from the first author upon reasonable request by e-mail,
+subject to approval by the institutional ethics committee. See the data and code availability
+statement in the paper.
+
+To run the code on other data, set `data.excel_path` and `data.image_root` in
+`configs/config.yaml`. The label table expects one row per eye with patient identifier, eye
+identifier and six binary labels. Paths in the released configs point to an internal cluster and
+must be replaced.
+
+## Usage
+
+```bash
+# training
+python main.py --mode train --config configs/config.yaml --device cuda
+
+# evaluation with a saved checkpoint
+python main.py --mode eval --config configs/config.yaml --checkpoint <path/to/best_model.pth>
+
+# test set only
+python main.py --mode test --config configs/config.yaml --checkpoint <path/to/best_model.pth>
+
+# multi-seed runs (seeds 42, 123, 2026, 3407, 9001)
+python main_seed.py --config configs/config.yaml --device cuda
+```
+
+An ablation run uses the same entry point with the corresponding config, for example:
+
+```bash
+python main.py --mode train --config configs/ablation/ablation_10_ours_no_channel_gate.yaml
+```
+
+## License
+
+Released under the MIT License; see [LICENSE](LICENSE).
+
+## Contact
+
+Wenrui Zhou — celeste_zhou@foxmail.com

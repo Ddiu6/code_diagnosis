@@ -1,1 +1,20 @@
-configs\ablation
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Experiment outputs (logs and checkpoints are not part of the release)
+OURS_p/
+*.pth
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
