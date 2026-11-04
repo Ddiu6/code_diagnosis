@@ -1,0 +1,89 @@
+data:
+  excel_path: /mnt/data/zhouwenrui/projects/datasets/0831.xlsx
+  image_root: /mnt/data/zhouwenrui/projects/image_root_5
+  val_ratio: 0.1
+  test_ratio: 0.2
+  image_size: 224
+  num_workers: 4
+  crop:
+    top: 0.15
+    bottom: 0.15
+    left: 0.2
+    right: 0.2
+    show_sample: false
+  augmentation:
+    rotation_degrees: 10
+    rotation_p: 0.1
+    clahe:
+      enabled: true
+      clip_limit: 2.0
+      tile_grid_size:
+      - 8
+      - 8
+      p: 0.5
+    speckle_noise:
+      enabled: false
+      sigma: 0.05
+      p: 0.5
+  roi:
+    enabled: false
+    crop:
+      left: 0.2
+      right: 0.3
+      top: 0.25
+      bottom: 0.25
+    darken: 0.22
+  us_augment:
+    enabled: true
+    speckle_p: 0.3
+    echo_p: 0.25
+    artifact_p: 0.2
+    max_ops: 2
+  require_patient_split: true
+model:
+  backbone: convnext_tiny
+  pretrained: true
+  embed_dim: 256
+  fusion_heads: 4
+  fusion_hidden_dim: 128
+  attn_dropout: 0.2
+  dropout: 0.2
+  use_cross_view: false
+  cross_view_layers: 1
+  cross_view_heads: 4
+  use_view_gate: true
+  use_cross_view_gate: true
+  use_label_gcn: false
+  label_gcn_threshold: 0.05
+contrastive:
+  enabled: true
+  weight: 0.03
+  temperature: 0.07
+  proj_dim: 128
+train:
+  batch_size: 8
+  epochs: 100
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  optimizer: adamw
+  scheduler: cosine_epoch
+  min_lr: 1.0e-06
+  warmup_epochs: 5
+  warmup_start_lr: 1.0e-06
+  ema_decay: 0.999
+  grad_clip_norm: 1.0
+  use_amp: false
+  early_stopping_patience: 40
+  selection_metric: micro_f1
+loss:
+  name: bce
+eval:
+  threshold: 0.5
+  tta: false
+logging:
+  best_model_name: best_model.pth
+  split_file: /mnt/data/zhouwenrui/projects/eyeClassfier_exp/split_files/split_p.json
+  save_best_val_predictions: true
+  log_dir: ../results1021/ablation_02_no_cross_view/logs
+  save_dir: ../results1021/ablation_02_no_cross_view/checkpoints
+seed: 42

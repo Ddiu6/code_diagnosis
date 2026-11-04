@@ -1,0 +1,107 @@
+# ============================================================
+# OURS Phase 2: View-Gated Multi-Head Attention MIL
+# ============================================================
+
+# --- Data ---
+data:
+  excel_path: "/mnt/data/zhouwenrui/projects/datasets/0831.xlsx"
+  image_root: "/mnt/data/zhouwenrui/projects/image_root_5"
+  val_ratio: 0.1
+  test_ratio: 0.2
+  image_size: 224          # 回退到 224 (384 未带来正向收益)
+  num_workers: 4
+  crop:
+    top: 0.15
+    bottom: 0.15
+    left: 0.20
+    right: 0.20
+    show_sample: true
+
+  augmentation:
+    rotation_degrees: 10
+    rotation_p: 0.1
+    clahe:
+      enabled: true
+      clip_limit: 2.0
+      tile_grid_size: [8, 8]
+      p: 0.5
+    speckle_noise:
+      enabled: false
+      sigma: 0.05
+      p: 0.5
+
+  # ROI 眼区约束（启用时替代 crop 的 BorderCrop：固定裁边 + 内容框收紧 + 椭圆约束压暗球外）
+  roi:
+    enabled: false
+    crop:
+      left: 0.2
+      right: 0.3
+      top: 0.25
+      bottom: 0.25
+    darken: 0.22
+
+  # 超声干扰仿真增强（Rayleigh 散斑 / 回声增强 / 设备伪影，仅训练期生效）
+  us_augment:
+    enabled: true
+    speckle_p: 0.30
+    echo_p: 0.25
+    artifact_p: 0.20
+    max_ops: 2
+
+# --- Model ---
+model:
+  backbone: "convnext_tiny"          # tiny(768) / base(1024) / large(1536)
+  pretrained: true
+  embed_dim: 256
+  fusion_heads: 4                    # Phase 2: 多头注意力头数
+  fusion_hidden_dim: 128             # Phase 2: 注意力隐层维度
+  attn_dropout: 0.2                  # 注意力权重 dropout (防过拟合)
+  dropout: 0.2
+  use_cross_view: true               # 是否启用跨视图交互模块 (Cross-View Transformer)
+  cross_view_layers: 1               # 交互层数 (数据量小建议 1)
+  cross_view_heads: 4                # 跨视图注意力头数 (需整除 embed_dim)
+  use_view_gate: true                # 视图门控开关 (ViewGate, 特征级逐维度门控)
+  use_cross_view_gate: true          # 交互门控开关 (视图级标量门控, 控制交互增量)
+  use_label_gcn: false               # 标签共现GCN模块开关 (ML-GCN, 替代分类头)
+  label_gcn_threshold: 0.05          # 共现邻接矩阵弱边阈值 (数据共现弱, 最高约0.17, 设0.05保留主要边)
+
+# --- Phase 2: Cross-View Contrastive Learning ---
+contrastive:
+  enabled: true                      # 是否启用跨视图对比损失
+  weight: 0.03                       # 对比损失权重 λ (降低以缓解过拟合)
+  temperature: 0.07                  # InfoNCE 温度 (推荐 0.05~0.1)
+  proj_dim: 128                      # 对比投影头输出维度
+
+# --- Training ---
+train:
+  batch_size: 8
+  epochs: 100
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  optimizer: "adamw"
+  scheduler: "cosine_epoch"
+  min_lr: 0.000001
+
+  warmup_epochs: 5                   # 保留 warmup
+  warmup_start_lr: 0.000001
+  ema_decay: 0.999                   # 保留 EMA
+  grad_clip_norm: 1.0                # 保留梯度裁剪
+  use_amp: false                     # 关闭 AMP (224 分辨率下不需要)
+
+# --- Loss ---
+loss:
+  name: "bce"                        # 回退到 BCE (ASL 未带来正向收益)
+
+# --- Evaluation ---
+eval:
+  threshold: 0.5
+  tta: false                       # Test-Time Augmentation: 推理时水平翻转+原图平均 logits
+
+# --- Logging ---
+logging:
+  log_dir: "./OURS_p/seed/1/logs"
+  save_dir: "./OURS_p/seed/1/checkpoints"
+  best_model_name: "best_model.pth"
+  split_file: "/mnt/data/zhouwenrui/projects/eyeClassfier_exp/split_files/split_p.json"                    # 留空则自动用 save_dir/splits.json（训练生成、测试复用，保证划分一致）
+
+seed: 42
